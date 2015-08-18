@@ -234,18 +234,27 @@ sub pkg_add {
         $q_svc->enqueue(['db', 'ack', $arch, $builder, $data]);
         return;
     }
-    
+
     # move file and signature, repo-add it
     print "   -> adding $arch/$repo/$pkgname ($filename)..\n";
     $q_svc->enqueue(['db', 'farm', 'insert', $arch, $repo, $filename]);
     system("mv -f $self->{packaging}->{in_pkg}/$arch/$filename $self->{packaging}->{repo}->{$arch}/$repo");
-    system("mv -f $self->{packaging}->{in_pkg}/$arch/$filename.sig $self->{packaging}->{repo}->{$arch}/$repo");
     if ($? >> 8) {
-        print "    -> move failed\n";
+        print "    -> pkg move failed\n";
         $data->{response} = "FAIL";
         $q_svc->enqueue(['db', 'ack', $arch, $builder, $data]);
         return;
     }
+    if (-e "$self->{packaging}->{in_pkg}/$arch/$filename.sig") {
+        system("mv -f $self->{packaging}->{in_pkg}/$arch/$filename.sig $self->{packaging}->{repo}->{$arch}/$repo");
+        if ($? >> 8) {
+            print "    -> pkg.sig move failed\n";
+            $data->{response} = "FAIL";
+            $q_svc->enqueue(['db', 'ack', $arch, $builder, $data]);
+            return;
+        }
+    }
+
     $q_svc->enqueue(['db', 'farm', 'add', $arch, $repo, $filename]);
     system("$self->{packaging}->{archbin}/repo-add -q $self->{packaging}->{repo}->{$arch}/$repo/$repo.db.tar.gz $self->{packaging}->{repo}->{$arch}/$repo/$filename");
     if ($? >> 8) {
@@ -764,10 +773,13 @@ sub ready_list {
 
 # rehash stored attributes pulled from database
 #   skip bitmasks in use:
-#    - armv5:  0000 0011 ( 3) - all | v5
-#    - armv7:  0000 0101 ( 5) - all | v7
-#    - armv8:  0000 1001 ( 9) - all | v8
-#    - armv6:  0001 0001 (17) - all | v6
+#    - armv5:  0000 0011 (  3) - all | v5
+#    - armv7:  0000 0101 (  5) - all | v7
+#    - armv8:  0000 1001 (  9) - all | v8
+#    - armv6:  0001 0001 ( 17) - all | v6
+#    - XXXXX:  0010 0001 ( 33) - all | RESERVED
+#    -  i686:  0100 0001 ( 65) - all | i686
+#    -x86_64:  1000 0001 (129) - all | x86_64
 # sender: IRC
 sub rehash {
     my $self = shift;
@@ -783,6 +795,8 @@ sub rehash {
     
     # notify Service of architectures
     $q_svc->enqueue(['db', 'arches', join(' ', keys %{$self->{arch}})]);
+    $q_mir->enqueue(['db', 'arches', join(' ', keys %{$self->{arch}})]);
+    $q_irc->enqueue(['db', 'arches', join(' ', keys %{$self->{arch}})]);
 }
 
 # print out packages to review for large package removal from ABS
@@ -915,243 +929,6 @@ sub status {
             $q_irc->enqueue(['db', 'privmsg', "[status] $package skipped for $skipret"]);
         }
     }
-}
-
-# update database with new packages from git and ABS
-# sender: IRC
-sub update {
-    my $self = shift;
-    my (%gitlist, %abslist, %newlist, %dellist);
-    my $gitroot = $self->{packaging}->{git}->{root};
-    my $absroot = $self->{packaging}->{abs}->{root};
-    my $workroot = $self->{packaging}->{workroot};
-    my $archbin = $self->{packaging}->{archbin};
-    
-    my %priority = ( 'core'         => 10,  # default importance (package selection priority)
-                     'extra'        => 20,
-                     'community'    => 30,
-                     'aur'          => 40,
-                     'alarm'        => 50 );
-    
-    $q_irc->enqueue(['db', 'privmsg', 'Updating git..']);
-    print "update git..\n";
-    system("pushd $gitroot; git pull; popd");
-    
-    # add/update git packages
-    print "update git packages..\n";
-    my $git_count = 0;
-    foreach my $repo (@{$self->{packaging}->{git}->{repos}}) {
-        foreach my $pkg (glob("$gitroot/$repo/*")) {
-            next unless (-d $pkg);  # skip non-directories
-            $pkg =~ s/^\/.*\///;    # strip leading path
-            
-            $gitlist{$pkg} = 1;
-            my ($db_repo, $db_pkgver, $db_pkgrel, $db_plugrel, $db_importance) = $self->{dbh}->selectrow_array("select repo, pkgver, pkgrel, plugrel, importance from abs where package = ?", undef, $pkg);
-            $db_plugrel = $db_plugrel || "0";
-            my $vars = `./pkgsource.sh $gitroot $repo $pkg`;
-            chomp($vars);
-            my ($pkgname,$provides,$pkgver,$pkgrel,$depends,$makedepends,$buildarch,$noautobuild,$highmem) = split(/\|/, $vars);
-            
-            # skip a bad source
-            next unless (defined $pkgver);
-            
-            # set/reset plugrel
-            my $plugrel;
-            if (defined $db_plugrel && "$pkgver-$pkgrel" eq "$db_pkgver-$db_pkgrel") {
-                $plugrel = $db_plugrel;
-            } else {
-                $plugrel = 0;
-            }
-            
-            # set importance
-            my $importance = $priority{$repo};
-            
-            # relocate package if repo has changed
-            if (defined $db_repo && $db_repo ne $repo) {
-                print "relocating $db_repo/$pkg to $repo\n";
-                $self->_pkg_relocate($pkg, $repo);
-            }
-            
-            # update abs table regardless of new version
-            $self->{dbh}->do("insert into abs (package, repo, pkgname, provides, pkgver, pkgrel, plugrel, depends, makedepends, git, abs, skip, highmem, del, importance) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, 0, ?)
-                              on duplicate key update repo = ?, pkgname = ?, provides = ?, pkgver = ?, pkgrel = ?, plugrel = ?, depends = ?, makedepends = ?, git = 1, abs = 0, skip = ?, highmem = ?, del = 0, importance = ?",
-                              undef, $pkg, $repo, $pkgname, $provides, $pkgver, $pkgrel, $plugrel, $depends, $makedepends, $buildarch, $highmem, $importance, $repo, $pkgname, $provides, $pkgver, $pkgrel, $plugrel, $depends, $makedepends, $buildarch, $highmem, $importance);
-            
-            # new package, different plugrel or version, done = 0
-            next unless (! defined $db_pkgver || "$pkgver-$pkgrel" ne "$db_pkgver-$db_pkgrel");
-            
-            # create work unit package regardless of new version
-            `tar -zcf "$workroot/$repo-$pkg.tgz" -C "$gitroot/$repo" "$pkg" > /dev/null`;
-            
-            # if new, add to list
-            $newlist{$pkg} = 1 if (! defined $db_pkgver);
-            
-            # noautobuild set, assume built, done = 1
-            my $is_done = 0;
-            $is_done = 1 if ($noautobuild);
-            print "$repo/$pkg to $pkgver-$pkgrel-plug$plugrel, done = $is_done\n";
-            
-            # update architecture tables
-            my ($db_id) = $self->{dbh}->selectrow_array("select id from abs where package = ?", undef, $pkg);
-            foreach my $arch (keys %{$self->{arch}}) {
-                $self->{dbh}->do("insert into $arch (id, done, fail) values (?, ?, 0)
-                                  on duplicate key update done = ?, fail = 0",
-                                  undef, $db_id, $is_done, $is_done);
-            }
-            $git_count++;
-        }
-    }
-    
-    # add/update abs packages
-    $q_irc->enqueue(['db', 'privmsg', 'Updating abs..']);
-    print "update abs packages..\n";
-    my $abs_count = 0;
-    `ABSROOT=$absroot $archbin/abs`;
-    foreach my $repo (@{$self->{packaging}->{abs}->{repos}}) {
-        foreach my $pkg (glob("$absroot/$repo/*")) {
-            next unless (-d $pkg);          # skip non-directories
-            $pkg =~ s/^\/.*\///;            # strip leading path
-            next if ($pkg =~ /.*\-lts$/);   # skip Arch LTS packages
-            
-            $abslist{$pkg} = 1;
-            my ($db_repo, $db_pkgver, $db_pkgrel, $db_skip, $db_highmem, $db_importance) = $self->{dbh}->selectrow_array("select repo, pkgver, pkgrel, skip, highmem, importance from abs where package = ?", undef, $pkg);
-            my $vars = `./pkgsource.sh $absroot $repo $pkg`;
-            chomp($vars);
-            my ($pkgname,$provides,$pkgver,$pkgrel,$depends,$makedepends) = split(/\|/, $vars);
-            if ($gitlist{$pkg}) {
-                # ALARM pkgrel bumps are tracked as added decimal numbers, strip that to determine actual differences
-                my $db_pkgrel_stripped = $db_pkgrel;
-                $db_pkgrel_stripped =~ s/\.+.*//;
-                if ("$pkgver-$pkgrel" ne "$db_pkgver-$db_pkgrel_stripped") {
-                    $q_irc->enqueue(['db', 'privmsg', "$pkg is different in git, git = $db_pkgver-$db_pkgrel, abs = $pkgver-$pkgrel"]);
-                }
-                if ($db_repo ne $repo) {
-                    $q_irc->enqueue(['db', 'privmsg', "$pkg has been relocated in ABS, git = $db_repo, abs = $repo"]);
-                }
-                # git transition: set abs = 1 on git packages that have an abs counterpart
-                $self->{dbh}->do("update abs set abs = 1 where package = ?", undef, $pkg);
-                next;
-            }
-            
-            # skip a bad source
-            next unless (defined $pkgver);
-            
-            # if new, add to list
-            $newlist{$pkg} = 1 if (! defined $db_pkgver);
-            
-            # set importance
-            my $importance = $priority{$repo};
-            
-            # relocate package if repo has changed
-            if (defined $db_repo && $db_repo ne $repo) {
-                print "relocating $db_repo/$pkg to $repo\n";
-                $self->_pkg_relocate($pkg, $repo);
-            }
-            
-            # update abs table
-            my $is_skip = defined $db_skip ? $db_skip : 1;
-            my $is_highmem = defined $db_highmem ? $db_highmem : 0;
-            $self->{dbh}->do("insert into abs (package, repo, pkgname, provides, pkgver, pkgrel, depends, makedepends, git, abs, skip, highmem, del, importance) values (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, 0, ?)
-                              on duplicate key update repo = ?, pkgname = ?, provides = ?, pkgver = ?, pkgrel = ?, depends = ?, makedepends = ?, git = 0, abs = 1, skip = ?, highmem = ?, del = 0, importance = ?",
-                              undef, $pkg, $repo, $pkgname, $provides, $pkgver, $pkgrel, $depends, $makedepends, $is_skip, $is_highmem, $importance, $repo, $pkgname, $provides, $pkgver, $pkgrel, $depends, $makedepends, $is_skip, $is_highmem, $importance);
-            
-            # new package, different version, update, done = 0
-            next unless (! defined $db_pkgver || "$pkgver-$pkgrel" ne "$db_pkgver-$db_pkgrel");
-            `tar -zcf "$workroot/$repo-$pkg.tgz" -C "$absroot/$repo" "$pkg" > /dev/null`;
-            print "$repo/$pkg to $pkgver-$pkgrel\n";
-            
-            # update architecture tables
-            my ($db_id) = $self->{dbh}->selectrow_array("select id from abs where package = ?", undef, $pkg);
-            foreach my $arch (keys %{$self->{arch}}) {
-                $self->{dbh}->do("insert into $arch (id, done, fail) values (?, 0, 0) on duplicate key update done = 0, fail = 0", undef, $db_id);
-            }
-            $abs_count++;
-        }
-    }
-    
-    # build package deletion list
-    my $rows = $self->{dbh}->selectall_arrayref("select package, git, abs from abs where del = 0");
-    foreach my $row (@$rows) {
-        my ($pkg, $git, $abs) = @$row;
-        next if ($git && $gitlist{$pkg});
-        next if ($abs && $abslist{$pkg});
-        print "del flag on $pkg\n";
-        $dellist{$pkg} = 1;
-    }
-    
-    $q_irc->enqueue(['db', 'privmsg', "Updated $git_count from git, $abs_count from abs. " . scalar(keys %newlist)  . " new, " . scalar(keys %dellist) . " removed."]);
-    
-    # switch on deletion limit
-    if (scalar(keys %dellist) > 10) {
-        $self->{dellist} = \%dellist;
-        $self->{newlist} = \%newlist;
-        $q_irc->enqueue(['db', 'privmsg', "Warning: " . scalar(keys %dellist) . " packages to be deleted : !review and/or !continue"]);
-    } else {
-        $self->update_continue(\%dellist);
-    }
-}
-
-# complete the update with package purging and dependency table rebuilding
-# sender: IRC
-sub update_continue {
-    my ($self, $list) = @_;
-    my %dellist;
-    
-    # use the list provided or pull from self after warning
-    if (defined $list) {
-        %dellist = %{$list};
-    } elsif (defined $self->{dellist}) {
-        %dellist = %{$self->{dellist}};
-        undef $self->{dellist};
-        undef $self->{newlist};
-    } else {
-        $q_irc->enqueue(['db', 'privmsg', "No pending update."]);
-        return;
-    }
-    
-    # prune abs table of deleted packages, remove repo files
-    foreach my $pkg (keys %dellist) {
-        $self->{dbh}->do("update abs set abs = 0, git = 0, del = 1 where package = ?", undef, $pkg);
-        foreach my $arch (keys %{$self->{arch}}) {
-            $self->pkg_prep($arch, { pkgbase => $pkg });
-        }
-    }
-    
-    # build new dep tables
-    $q_irc->enqueue(['db', 'privmsg', "Building dependencies.."]);
-    my $rows = $self->{dbh}->selectall_arrayref("select id, pkgname, provides, depends, makedepends from abs where del = 0");
-    $self->{dbh}->do("delete from names");
-    $self->{dbh}->do("delete from deps");
-    foreach my $row (@$rows) {
-        my ($id, $pkgname, $provides, $depends, $makedepends) = @$row;
-        my @names = split(/ /, join(' ', $pkgname, $provides));
-        my %deps;
-        
-        # build names table
-        foreach my $name (@names) {
-            $name =~ s/(<|=|>).*//;
-            next if ($name eq "");
-            $self->{dbh}->do("insert into names values (?, ?)", undef, $name, $id);
-        }
-        
-        # build deps table
-        next if (!$depends && !$makedepends);
-        $depends = "" unless $depends;
-        $makedepends = "" unless $makedepends;
-        foreach my $name (split(/ /, join(' ', $depends, $makedepends))) {
-            $name =~ s/(<|=|>).*//;
-            next if ($name eq "");
-            next if (grep {$_ eq $name} @names);
-            $deps{$name} = 1;
-        }
-        foreach my $dep (keys %deps) {
-            $self->{dbh}->do("insert into deps values (?, ?)", undef, $id, $dep);
-        }
-    }
-    $q_irc->enqueue(['db', 'privmsg', "Update complete."]);
-    
-    # send number of ready packages to service
-    $self->ready_list();
 }
 
 ################################################################################

@@ -121,9 +121,6 @@ sub _cb_publicmsg {
             case "!aur" {
                 $q_db->enqueue(['irc', 'aur_check']);
             }
-            case "!continue" {
-                $q_db->enqueue(['irc', 'update_continue']);
-            }
             case "!deselect" {
                 if ($arg) {
                     my ($arch, $pkg) = split(/ /, $arg, 3);
@@ -263,14 +260,16 @@ sub _cb_publicmsg {
                 if ($arg && ($arg eq '5' || $arg eq '6' || $arg eq '7' || $arg eq '8')) {
                     $q_mir->enqueue(['irc', 'queue', "armv$arg"]);
                     $self->privmsg("[sync] queued armv$arg mirror update");
+                } elsif ( $arg && exists($self->{arch}{"$arg"})) {
+                    $q_mir->enqueue(['irc', 'queue', $arg]);
+                    $self->privmsg("[sync] queued $arg mirror update");
                 } elsif ($arg && $arg eq 'os') {
                     $q_mir->enqueue(['irc', 'queue', 'os']);
                     $self->privmsg("[sync] queued rootfs mirror update");
                 } else {
-                    $q_mir->enqueue(['irc', 'queue', 'armv5']);
-                    $q_mir->enqueue(['irc', 'queue', 'armv6']);
-                    $q_mir->enqueue(['irc', 'queue', 'armv7']);
-                    $q_mir->enqueue(['irc', 'queue', 'armv8']);
+                    foreach my $arch (sort keys %{$self->{arch}}) {
+                        $q_mir->enqueue(['irc', 'queue', $arch]);
+                    }
                     $self->privmsg("[sync] queued mirror updates");
                 }
             }
@@ -278,10 +277,9 @@ sub _cb_publicmsg {
                 my ($arch, $pkg) = split(/ /, $arg, 2);
                 if ($pkg && $arch) {
                     if ($arch eq "all") {
-                        $q_db->enqueue(['irc', 'pkg_unfail', 'armv5', $pkg]);
-                        $q_db->enqueue(['irc', 'pkg_unfail', 'armv6', $pkg]);
-                        $q_db->enqueue(['irc', 'pkg_unfail', 'armv7', $pkg]);
-                        $q_db->enqueue(['irc', 'pkg_unfail', 'armv8', $pkg]);
+                        foreach $arch (sort keys %{$self->{arch}}) {
+                            $q_db->enqueue(['irc', 'pkg_unfail', $arch, $pkg]);
+                        }
                     } else {
                         $q_db->enqueue(['irc', 'pkg_unfail', $arch, $pkg]);
                     }
@@ -295,9 +293,6 @@ sub _cb_publicmsg {
                 } else {
                     $self->privmsg("usage: !unskip <package>");
                 }
-            }
-            case "!update" {
-                $q_db->enqueue(['irc','update']);
             }
         }
     
@@ -358,6 +353,18 @@ sub quit {
     $self->{con}->disconnect('quit');
     $available->down_force(10);
     $self->{condvar}->broadcast;
+}
+
+# populate our architectures list, set stop status
+# sender: Database
+sub arches {
+    my ($self, $list) = @_;
+    undef $self->{arch};
+    foreach my $arch (split(/ /, $list)) {
+        $self->{arch}->{$arch} = $arch;
+        $self->{$arch} = 'stop' unless defined $self->{$arch};
+    }
+    print "IRC: now serving architectures: " . join(' ', sort keys %{$self->{arch}}) . "\n";
 }
 
 ################################################################################
