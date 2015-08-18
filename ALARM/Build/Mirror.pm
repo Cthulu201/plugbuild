@@ -75,6 +75,18 @@ sub Run {
 ################################################################################
 # Orders
 
+# populate our architectures list, set stop status
+# sender: Database
+sub arches {
+    my ($self, $list) = @_;
+    undef $self->{arch};
+    foreach my $arch (split(/ /, $list)) {
+        $self->{arch}->{$arch} = $arch;
+        $self->{$arch} = 'stop' unless defined $self->{$arch};
+    }
+    print "MIR: now serving architectures: " . join(' ', sort keys %{$self->{arch}}) . "\n";
+}
+
 # rsync thread completion
 # sender: Mirror worker threads
 sub done {
@@ -235,7 +247,7 @@ sub sync {
     my ($self, $address, $cn) = @_;
     
     print "Mirror: pushing to $address\n";
-    foreach my $arch ('armv5', 'armv6', 'armv7', 'armv8') {
+    foreach my $arch (sort keys %{$self->{arch}}) {
         `rsync -4rlt --delete $self->{repo}->{$arch} $address`;
         if ($? >> 8) {
             print "Mirror: failed to push $arch to $address: $!\n";
@@ -297,6 +309,13 @@ sub _rsync {
 # check Tier 2 mirrors for synchronization
 sub _tier2 {
     my ($self, $arch, $sync) = @_;
+    if (exists($self->{arch}{$arch})) {
+        if (exists($self->{arch}{$arch}{carch})) {
+            $arch = $self->{arch}{$arch}{carch};
+        }
+    }
+
+    # posterity until schema updates
     $arch = "arm" if $arch eq "armv5";
     $arch = "armv6h" if $arch eq "armv6";
     $arch = "armv7h" if $arch eq "armv7";
