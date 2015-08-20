@@ -43,7 +43,7 @@ sub Run {
     
     if ($available->down_nb()) {
         # start TCP servers
-        my $service = tcp_server undef, $self->{port}, sub { $self->_cb_accept(@_, 0); };
+        my $service = tcp_server exists $self->{host} && $self->{host} ne ''?$self->{host}:undef, $self->{port}, sub { $self->_cb_accept(@_, 0); };
         my $nodesvc = tcp_server "127.0.0.1", $self->{port}+1, sub { $self->_node_accept(@_, 0); };
         my $github = tcp_server undef, $self->{port}+2, sub { $self->_gh_accept(@_); };
         
