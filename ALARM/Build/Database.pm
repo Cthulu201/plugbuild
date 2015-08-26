@@ -520,7 +520,13 @@ sub pkg_unfail {
 sub poll {
     my ($self, $poll_type) = @_;
     my %trunks;
-    
+    my $repo_rows = $self->{dbh}->selectall_arrayref("select name from repos");
+    my %valid_repos;
+    foreach my $row (@$repo_rows) {
+        my ($repo) = @$row;
+        $valid_repos{$repo}=1;
+    }
+
     # parse sources
     my $repos = $self->{dbh}->selectall_arrayref("select id, type, root, sha from sources");
     foreach my $repo (@$repos) {
@@ -563,7 +569,7 @@ sub poll {
             if ($type eq 'git') {   # get repo for git overlay packages since it's easy now
                 ($repo, $pkg) = split('/', $path, 2);
                 next if (!$pkg);    # not a package update, skip
-                
+                next if (!exists $valid_repos{$repo});
                 # get last commit email
                 $email = `git --work-tree=$root --git-dir=$root/.git log -n1 --pretty="%ae" $root/$path`;
                 chomp $email;
@@ -1002,12 +1008,12 @@ sub _pkg_work {
 sub _process {
     my $self = shift;
     my $workroot = $self->{packaging}->{workroot};
-    my %priority = ( 'core'         => 10,  # default importance (package selection priority)
-                     'extra'        => 20,
-                     'community'    => 30,
-                     'aur'          => 40,
-                     'alarm'        => 50 );
-    
+    my %priority;
+    my $priority_rows = $self->{dbh}->selectall_arrayref("select name, priority from repos");
+    foreach my $row (@$priority_rows) {
+        my ($repo,$importance) = @$row;
+        $priority{$repo}=$importance;
+    }
     # match holds to git updates, delete upstream holds if satisfied in overlay
     my $rows = $self->{dbh}->selectall_arrayref("select path, queue.repo, queue.package, queue.pkgver, queue.pkgrel, abs.repo, abs.pkgver, abs.pkgrel, queue.skip, override, group_concat(arch) from queue left outer join architectures on queue.skip & architectures.skip > 0 inner join abs on queue.package = abs.package where ref = 1 and hold = 1 group by queue.package");
     my $hold_total = 0;
