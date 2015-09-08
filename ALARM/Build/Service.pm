@@ -531,10 +531,12 @@ sub _cb_error {
             if (defined $self->{clients}->{$handle}->{file}) {      # close out file if it's open
                 close $self->{clients}->{$handle}->{file};
             }
-            if ($self->{clients}->{$handle}->{ou} eq "builder" && $self->{clients}->{$handle}->{state} eq "building") {
-                print "   -> releasing package: $self->{clients}->{$handle}->{cn} ($self->{clients}->{$handle}->{arch}) $self->{clients}->{$handle}->{pkgbase}\n";
-                $q_irc->enqueue(['svc', 'privmsg', "[released] $self->{clients}->{$handle}->{cn} ($self->{clients}->{$handle}->{arch}) $self->{clients}->{$handle}->{pkgbase}"]);
-                $q_db->enqueue(['svc', 'pkg_release', $self->{clients}->{$handle}->{arch}, $self->{clients}->{$handle}->{cn}, { arch => $self->{clients}->{$handle}->{arch}, pkgbase => $self->{clients}->{$handle}->{pkgbase} }]);
+            if (defined $self->{clients}->{$handle}->{state}) {
+                if ($self->{clients}->{$handle}->{ou} eq "builder" && $self->{clients}->{$handle}->{state} eq "building") {
+                    print "   -> releasing package: $self->{clients}->{$handle}->{cn} ($self->{clients}->{$handle}->{arch}) $self->{clients}->{$handle}->{pkgbase}\n";
+                    $q_irc->enqueue(['svc', 'privmsg', "[released] $self->{clients}->{$handle}->{cn} ($self->{clients}->{$handle}->{arch}) $self->{clients}->{$handle}->{pkgbase}"]);
+                    $q_db->enqueue(['svc', 'pkg_release', $self->{clients}->{$handle}->{arch}, $self->{clients}->{$handle}->{cn}, { arch => $self->{clients}->{$handle}->{arch}, pkgbase => $self->{clients}->{$handle}->{pkgbase} }]);
+                }
             }
             delete $self->{clientsref}->{"$self->{clients}->{$handle}->{ou}/$self->{clients}->{$handle}->{cn}"};
         }
