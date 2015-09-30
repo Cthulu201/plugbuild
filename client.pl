@@ -20,7 +20,7 @@ my %config = ParseConfig("$Bin/client.conf");
 my $workroot    = "$Bin/work";
 my $pkgdest     = "$Bin/pkgdest";
 my $cacheroot   = "$Bin/cache";
-my $workurl     = "http://$config{server}$config{workurl}";
+my $workurl     = "$config{workurl}";
 
 my $md5 = hash_script();
 
