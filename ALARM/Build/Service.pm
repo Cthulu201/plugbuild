@@ -768,9 +768,11 @@ sub _cb_verify_cb {
         if ($type == Net::SSLeay::GEN_IPADD()) {
             if ($ip eq $name) {
                 if (defined $self->{clientsref}->{"$orgunit/$common"}) {
-                    my $oldhandle = $self->{clientsref}->{"$orgunit/$common"};
-                    $self->_cb_error($oldhandle, 1, 'duplicate client disconnect');
-                    $oldhandle->destroy;
+                    if ($ref != $self->{clientsref}->{"$orgunit/$common"}) {
+                        my $oldhandle = $self->{clientsref}->{"$orgunit/$common"};
+                        $self->_cb_error($oldhandle, 1, 'duplicate client disconnect');
+                        $oldhandle->destroy;
+                    }
                 }
                 $q_irc->enqueue(['svc', 'privmsg', "[SVC] verified ". Net::SSLeay::X509_NAME_oneline(Net::SSLeay::X509_get_subject_name($cert))]);
                 my %client = ( handle   => $ref,                # connection handle - must be preserved
