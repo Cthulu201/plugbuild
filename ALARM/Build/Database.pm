@@ -174,13 +174,13 @@ sub force {
             return;
         }
     }
-    my @force = $self->{dbh}->selectrow_array("select done, repo from $arch as a inner join abs on (a.id = abs.id) where package = ?", undef, $pkg);
+    my @force = $self->{dbh}->selectrow_array("select done, repo, pkgver, pkgrel from $arch as a inner join abs on (a.id = abs.id) where package = ?", undef, $pkg);
     if (!defined $force[0]) {
         $q_irc->enqueue(['db', 'privmsg', "[force] Package $pkg not found."]);
     } elsif ($force[0] eq "1") {
         $q_irc->enqueue(['db', 'privmsg', "[force] Package $pkg is already done for $arch."]);
     } else {
-        $q_svc->enqueue(['db', 'force', { command => 'next', arch => "$arch", repo => $force[1], pkgbase => $pkg }]);
+        $q_svc->enqueue(['db', 'force', { command => 'next', arch => "$arch", repo => $force[1], pkgbase => $pkg, version=> "$force[2]-$force[3]" }]);
     }
 }
 
