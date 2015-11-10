@@ -28,7 +28,13 @@ sub new {
     
     my $self = $config;
     $self->{dbh} = undef;
-    
+
+    if (exists($self->{packaging}->{layer_mode})) {
+       $self->{packaging}->{layer_mode} = ($self->{packaging}->{layer_mode} =~ /true|1|yes|on/i)
+    } else {
+       $self->{packaging}->{layer_mode} = 0
+    }
+
     bless $self, $class;
     return $self;
 }
@@ -112,10 +118,12 @@ sub aur_check {
 sub done {
     my $self = shift;
     my $ret = "Successful builds: ";
-    
+
+    my $git_only = ' and git = 1' if $self->{packaging}->{layer_mode};
+
     foreach my $arch (sort keys %{$self->{arch}}) {
-        my $count = ($self->{dbh}->selectrow_array("select count(*) from abs inner join $arch as a on (a.id = abs.id) where done = 1 and fail = 0 and skip & ? > 0 and del = 0", undef, $self->{skip}->{$arch}))[0] || 0;
-        my $total = ($self->{dbh}->selectrow_array("select count(*) from abs where skip & ? > 0 and del = 0", undef, $self->{skip}->{$arch}))[0] || 1;
+        my $count = ($self->{dbh}->selectrow_array("select count(*) from abs inner join $arch as a on (a.id = abs.id) where done = 1 and fail = 0 and skip & ? > 0 and del = 0".$git_only, undef, $self->{skip}->{$arch}))[0] || 0;
+        my $total = ($self->{dbh}->selectrow_array("select count(*) from abs where skip & ? > 0 and del = 0".$git_only, undef, $self->{skip}->{$arch}))[0] || 1;
         $ret .= "$arch: $count/$total (" . sprintf("%0.2f%%", ($count/$total)*100) . ") | ";
     }
     $ret =~ s/ \| $//;
@@ -153,10 +161,12 @@ sub dump {
 sub failed {
     my $self = shift;
     my $ret = "Failed builds: ";
+
+    my $git_only = ' and git = 1' if $self->{packaging}->{layer_mode};
     
     foreach my $arch (sort keys %{$self->{arch}}) {
-        my $count = ($self->{dbh}->selectrow_array("select count(*) from abs inner join $arch as a on (a.id = abs.id) where fail = 1 and skip & ? > 0 and del = 0", undef, $self->{skip}->{$arch}))[0] || 0;
-        my $total = ($self->{dbh}->selectrow_array("select count(*) from abs where skip & ? > 0 and del = 0", undef, $self->{skip}->{$arch}))[0] || 1;
+        my $count = ($self->{dbh}->selectrow_array("select count(*) from abs inner join $arch as a on (a.id = abs.id) where fail = 1 and skip & ? > 0 and del = 0".$git_only, undef, $self->{skip}->{$arch}))[0] || 0;
+        my $total = ($self->{dbh}->selectrow_array("select count(*) from abs where skip & ? > 0 and del = 0".$git_only, undef, $self->{skip}->{$arch}))[0] || 1;
         $ret .= "$arch: $count/$total (" . sprintf("%0.2f%%", ($count/$total)*100) . ") | ";
     }
     $ret =~ s/ \| $//;
@@ -648,6 +658,9 @@ sub poll {
                     $self->{dbh}->do("delete from queue where path = ?", undef, $path);
                     next;
                 }
+            } else {
+                # mark noautobuild if ABS in layer mode, without git overlay.
+                noautobuild=$self->{packaging}->{layer_mode};
             }
         }
         # update queue data
