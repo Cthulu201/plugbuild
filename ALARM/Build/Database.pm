@@ -35,6 +35,12 @@ sub new {
        $self->{packaging}->{layer_mode} = 0
     }
 
+    if (exists($self->{packaging}->{enforce_signing})) {
+       $self->{packaging}->{enforce_signing} = ($self->{packaging}->{enforce_signing} =~ /false|0|no|off/i)
+    } else {
+       $self->{packaging}->{enforce_signing} = 1
+    }
+
     bless $self, $class;
     return $self;
 }
@@ -263,6 +269,11 @@ sub pkg_add {
             $q_svc->enqueue(['db', 'ack', $arch, $builder, $data]);
             return;
         }
+    } elsif ($self->{packaging}->{enforce_signing}) {
+        print "    -> pkg.sig missing!\n";
+        $data->{response} = "FAIL";
+        $q_svc->enqueue(['db', 'ack', $arch, $builder, $data]);
+        return;
     }
 
     $q_svc->enqueue(['db', 'farm', 'add', $arch, $repo, $filename]);
