@@ -671,7 +671,7 @@ sub poll {
                 }
             } else {
                 # mark noautobuild if ABS in layer mode, without git overlay.
-                noautobuild=$self->{packaging}->{layer_mode};
+                $noautobuild=$self->{packaging}->{layer_mode};
             }
         }
         # update queue data
