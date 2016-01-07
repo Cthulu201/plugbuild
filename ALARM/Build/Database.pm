@@ -819,7 +819,7 @@ sub rehash {
     my $carches = {};
     my $rows = $self->{dbh}->selectall_arrayref("select * from architectures");
     foreach my $row (@$rows) {
-        my ($arch, $parent, $skipi, $carch) = @$row;
+        my ($arch, $parent, $skip, $carch) = @$row;
         $self->{arch}->{$arch} = $parent || $arch;
         $self->{skip}->{$arch} = int($skip) || 0;
         $carches->{$arch} = $carch;
