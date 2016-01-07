@@ -83,7 +83,7 @@ sub arches {
     foreach my $arch (split(/ /, $list)) {
         $self->{arch}->{$arch} = $arch;
         $self->{$arch} = {'count'=>0};
-        $self->{$arch}{carch} = $carch->{$arch} if exists($carch->{$arch});
+        $self->{$arch}{carch} = $carches->{$arch} if exists($carch->{$arch});
     }
     print "MIR: now serving architectures: " . join(' ', sort keys %{$self->{arch}}) . "\n";
 }
