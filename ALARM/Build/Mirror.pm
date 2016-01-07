@@ -75,14 +75,15 @@ sub Run {
 ################################################################################
 # Orders
 
-# populate our architectures list, set stop status
+# populate our architectures list, set count to 0
 # sender: Database
 sub arches {
-    my ($self, $list) = @_;
+    my ($self, $list, $carches) = @_;
     undef $self->{arch};
     foreach my $arch (split(/ /, $list)) {
         $self->{arch}->{$arch} = $arch;
-        $self->{$arch} = 'stop' unless defined $self->{$arch};
+        $self->{$arch} = {'count'=>0};
+        $self->{$arch}{carch} = $carch->{$arch} if exists($carch->{$arch});
     }
     print "MIR: now serving architectures: " . join(' ', sort keys %{$self->{arch}}) . "\n";
 }
@@ -309,9 +310,9 @@ sub _rsync {
 # check Tier 2 mirrors for synchronization
 sub _tier2 {
     my ($self, $arch, $sync) = @_;
-    if (exists($self->{arch}{$arch})) {
-        if (exists($self->{arch}{$arch}{carch})) {
-            $arch = $self->{arch}{$arch}{carch};
+    if (exists($self->{$arch})) {
+        if (exists($self->{$arch}{carch})) {
+            $arch = $self->{$arch}{carch} if defined($self->{$arch}{carch});
         }
     }
 

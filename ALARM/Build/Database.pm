@@ -816,17 +816,19 @@ sub rehash {
     
     undef $self->{arch};
     undef $self->{skip};
+    my $carches = {};
     my $rows = $self->{dbh}->selectall_arrayref("select * from architectures");
     foreach my $row (@$rows) {
-        my ($arch, $parent, $skip) = @$row;
+        my ($arch, $parent, $skipi, $carch) = @$row;
         $self->{arch}->{$arch} = $parent || $arch;
         $self->{skip}->{$arch} = int($skip) || 0;
+        $carches->{$arch} = $carch;
     }
     
     # notify Service of architectures
     $q_svc->enqueue(['db', 'arches', join(' ', keys %{$self->{arch}})]);
     $q_mir->enqueue(['db', 'arches', join(' ', keys %{$self->{arch}})]);
-    $q_irc->enqueue(['db', 'arches', join(' ', keys %{$self->{arch}})]);
+    $q_irc->enqueue(['db', 'arches', join(' ', keys %{$self->{arch}}), $carches]);
 }
 
 # print out packages to review for large package removal from ABS
